@@ -1,0 +1,1012 @@
+---
+title: "Predicting Flight Delays at the Pittsburgh Airport"
+author: "Group 21: Prem Loganathan, Jeff Scanlon, Jingfang Yuan"
+date: "5/14/2020"
+output: html_document
+
+---
+
+# Welcome and Introduction
+
+Hello and welcome to our Data Mining Project! Thank you for taking the time to read about our methodology and findings.
+
+This document will be organized in the following way:
+
+1. Statement of Problem and Objective
+2. Cleaning the Data
+3. Exploratory Dat Analysis
+4. Fitting our Models
+    + Feature selection
+    + Regression models
+    + Tree-based models
+    + Measures of fit
+5. Comparison to 2006 Data 
+6. Findings
+7. Conclusion
+
+
+## 1. Statement of Problem and Objective
+Delayed flights can be quite a nuisance. For passengers, delays can be costly. Costs associated with flight delays range from the cost of missed connections (flights that leave without you), the opportunity cost of being "trapped" in a airport terminal for more time than anticipated, and the social, mental, emotional, and physical toll that extended travel times can cause. Delayed flights can also be costly for airlines, who sometimes have to bear some of the financial burdens of delays, which may include compensating customers for delays that were ultimately diverted or cancelled, or providing hotel vouchers for flights that have been delayed until the next day.
+
+Our objective in this project is to mine data from a full year of flights that have arrived in and departed from the Pittsburgh, Pennsylvania airport. There were over 100,000 flights into and out of the Pittsburgh airport during the year 2019. Using different data mining methods, we will explore this data and look for variables that might be helpful in predicting which flights are likely to be delay, and by how long. Wouldn't it be helpful to have a tool that helped you predict which flights are likely to be delayed while you are comparison shopping online to find which flights are right for you? If you knew, weeks or months ahead of time, whether or not a flight was likely to leave on time? We will not be developing that tool here, but we will be trying to identify any variables that could be used as predictors if and when such a tool is developed.
+
+Thank you for reading our Problem Statement. Now, onto Cleaning the Data!
+
+## 2. Cleaning the Data
+
+#### Data Dictionary:
+Here we will provide a description of some of the variables that may not be self-explanatory or may have confusing names.
+    + “Carrier” refers to the airline responsible for the flight.
+    + “CrsArrTime” and “CrsDepTime” refer to the scheduled arrival and departure times of the flight, while “ArrTime” and “DepTime” refer to the actual arrival and departure times.
+    + “ArrDelayNew” is the difference between CrsArrTime and ArrTime in minutes. If the difference is negative (an early flight), it is coded as 0. A positive value means the flight was late by that number of minutes.
+    + “DepDelayNew” is the same as ArrDelayNew, but for departure delays instead of arrival delays.
+    + We also created some of our own variables, like “AdjArrTime” and “AdjDepTime,” which add 24 hours (one day) to the ArrTime and DepTime, respectively, if the flight was delayed until the next day.
+    + We created “ArrTimeGroup” and “DepTimeGroup,” which are factors that classify arrival and departure times as Early Morning, Morning, Afternoon, Evening, Night, and Late Night.
+    + "Distance" refers to the miles between Origin and Destination airports.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2) # graphics library
+library (plyr)
+library(dplyr)
+library(boot)    # contains cross-validation functions
+library(ISLR)    # contains code and data from the textbook
+library(knitr)   # contains kable() function
+library(tree)    # For the tree-fitting 'tree' function
+library(randomForest)
+library(gbm)  # For boosting
+library(readxl)
+library(leaps)
+
+options(scipen = 4)  # Suppresses scientific notation
+
+```
+#### Reading in the Data
+Next, we will read in our data file from an excel document and remove certain redundant variables.
+
+```{r}
+PIT_2019_raw <- read_excel("PIT_2019.xlsx")
+#View(PIT_2019_raw)
+#names(PIT_2019_raw)
+#summary(PIT_2019_raw)
+
+# Remove columns which have all fields as NAs and unrelevant columns 
+PIT_2019_1 <- select(PIT_2019_raw,-c(Year, Div1WheelsOn,Div1AirportSeqID, Div1AirportID,Div1Airport,DivDistance,DivArrDelay,DivActualTimeElapsed,DivReachedDest, DivAirportLandings, Flights,FirstDeptTime, TotalAddGTime, LongestAddGTime))
+
+```
+#### Converting variables to factors
+Next, we convert many of our variables into factors.
+
+```{r}
+#Convert to factors
+PIT_2019_2 <- PIT_2019_1
+PIT_2019_2$Quarter <- as.factor(PIT_2019_2$Quarter)
+levels(PIT_2019_2$Quarter) <-c("First", "Second", "Third", "Fourth");
+  
+PIT_2019_2$Month <- as.factor(PIT_2019_2$Month)
+levels(PIT_2019_2$Month) <- c("Jan", "Feb", "Mar", "Apr", "May", "June", "July", "Aug", "Sep", "Oct", "Nov", "Dec");  
+
+PIT_2019_2$DayOfWeek <- as.factor(PIT_2019_2$DayOfWeek)
+levels(PIT_2019_2$DayOfWeek) <- c("Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun");
+
+PIT_2019_2$Carrier <- as.factor(PIT_2019_2$Carrier)
+levels(PIT_2019_2$Carrier) <- c("Endeavor", "American", "Alaska", "JetBlue", "Delta", "ExpressJet", "Frontier", "Allegiant", "Hawaiian", "Envoy", "Spirit", "PSA", "SkyWest", "United", "Southwest", "Mesa", "Republic"); 
+
+#PIT_2019_2$Year <- as.factor(PIT_2019_2$Year)
+PIT_2019_2$DayOfMonth <- as.factor(PIT_2019_2$DayOfMonth)
+PIT_2019_2$DayOfWeek <- as.factor(PIT_2019_2$DayOfWeek)
+PIT_2019_2$UniqueCarrier <- as.factor(PIT_2019_2$UniqueCarrier)
+PIT_2019_2$CarrierID <- as.factor(PIT_2019_2$CarrierID)
+PIT_2019_2$Carrier <- as.factor(PIT_2019_2$Carrier)
+PIT_2019_2$TailNum <- as.factor(PIT_2019_2$TailNum)
+PIT_2019_2$FlightNum <- as.factor(PIT_2019_2$FlightNum)
+PIT_2019_2$OriginID <- as.factor(PIT_2019_2$OriginID)
+PIT_2019_2$OriginSeqID <- as.factor(PIT_2019_2$OriginSeqID)
+PIT_2019_2$OriginCityID <- as.factor(PIT_2019_2$OriginCityID)
+PIT_2019_2$Origin <- as.factor(PIT_2019_2$Origin)
+PIT_2019_2$OriginCity <- as.factor(PIT_2019_2$OriginCity)
+PIT_2019_2$OriginStAbbr <- as.factor(PIT_2019_2$OriginStAbbr)
+PIT_2019_2$OriginState <- as.factor(PIT_2019_2$OriginState)
+PIT_2019_2$OriginStateFips <- as.factor(PIT_2019_2$OriginStateFips)
+PIT_2019_2$OriginWac <- as.factor(PIT_2019_2$OriginWac)
+PIT_2019_2$DestID <- as.factor(PIT_2019_2$DestID)
+PIT_2019_2$DestSeqID <- as.factor(PIT_2019_2$DestSeqID)
+PIT_2019_2$DestCityID <- as.factor(PIT_2019_2$DestCityID)
+PIT_2019_2$Dest <- as.factor(PIT_2019_2$Dest)
+PIT_2019_2$DestCity <- as.factor(PIT_2019_2$DestCity)
+PIT_2019_2$DestStateAbbr <- as.factor(PIT_2019_2$DestStateAbbr)
+PIT_2019_2$DestStateFips <- as.factor(PIT_2019_2$DestStateFips)
+PIT_2019_2$DestState <- as.factor(PIT_2019_2$DestState)
+PIT_2019_2$DestWac <- as.factor(PIT_2019_2$DestWac)
+PIT_2019_2$CancellationCode <- as.factor(PIT_2019_2$CancellationCode)
+PIT_2019_2$Diverted <- as.factor(PIT_2019_2$Diverted)
+PIT_2019_2$DistanceGroup <- as.factor(PIT_2019_2$DistanceGroup)
+
+```
+#### Creating New Variables
+Next, we created new variables called "AdjArrTime", "AdjDepTime", "ArrTimeGroup", and "DepTimeGroup," which will account for delays that push the arrival or departure time to the next day. We also created "ArrDelayNewLog" to make a log transformation of the Arrival Delay data to see if we could normalize the distribution.
+```{r warning=FALSE}
+#Create Adjusted Arrival and Departure Times (Earlier than 5:00am)
+PIT_2019_2 <- mutate(PIT_2019_2, AdjArrTime = ifelse(ArrTime %in% 0:500, ArrTime+2400, ifelse(CrsArrTime - ArrTime > 200, ArrTime+2400, ArrTime))) 
+
+PIT_2019_2 <- mutate(PIT_2019_2, AdjDepTime = ifelse(DepTime %in% 0:500, DepTime+2400, ifelse(CrsDepTime - DepTime > 200, DepTime+2400, DepTime))) 
+#ifelse(CrsArrTime %in%2000:2400 & DepTime %in%500:1600, DepTime+2400, ArrTime)))
+
+
+#Create Arrival and Depature Time Factors
+PIT_2019_2$ArrTimeGroup[PIT_2019_2$ArrTime >=500 & PIT_2019_2$ArrTime <900] <- "Early Morning"
+PIT_2019_2$ArrTimeGroup[PIT_2019_2$ArrTime >=900 & PIT_2019_2$ArrTime <1300] <- "Morning"
+PIT_2019_2$ArrTimeGroup[PIT_2019_2$ArrTime >=1300 & PIT_2019_2$ArrTime <1700] <- "Afternoon"
+PIT_2019_2$ArrTimeGroup[PIT_2019_2$ArrTime >=1700 & PIT_2019_2$ArrTime <2100] <- "Evening"
+PIT_2019_2$ArrTimeGroup[PIT_2019_2$ArrTime >=2100 & PIT_2019_2$ArrTime <2500] <- "Night"
+PIT_2019_2$ArrTimeGroup[PIT_2019_2$ArrTime >=00 & PIT_2019_2$ArrTime <100] <- "Night"
+PIT_2019_2$ArrTimeGroup[PIT_2019_2$ArrTime >=100 & PIT_2019_2$ArrTime <500] <- "Late Night"
+
+PIT_2019_2$DepTimeGroup[PIT_2019_2$DepTime >=500 & PIT_2019_2$DepTime <900] <- "Early Morning"
+PIT_2019_2$DepTimeGroup[PIT_2019_2$DepTime >=900 & PIT_2019_2$DepTime <1300] <- "Morning"
+PIT_2019_2$DepTimeGroup[PIT_2019_2$DepTime >=1300 & PIT_2019_2$DepTime <1700] <- "Afternoon"
+PIT_2019_2$DepTimeGroup[PIT_2019_2$DepTime >=1700 & PIT_2019_2$DepTime <2100] <- "Evening"
+PIT_2019_2$DepTimeGroup[PIT_2019_2$DepTime >=2100 & PIT_2019_2$DepTime <2500] <- "Night"
+PIT_2019_2$DepTimeGroup[PIT_2019_2$DepTime >=00 & PIT_2019_2$DepTime <100] <- "Night"
+PIT_2019_2$DepTimeGroup[PIT_2019_2$DepTime >=100 & PIT_2019_2$DepTime <500] <- "Late Night"
+
+PIT_2019_2$ArrTimeGroup <- as.factor(PIT_2019_2$ArrTimeGroup)
+PIT_2019_2$DepTimeGroup <- as.factor(PIT_2019_2$DepTimeGroup)
+
+PIT_2019_2 <- mutate(PIT_2019_2,
+                     ArrTimeGroup = recode_factor(ArrTimeGroup, 
+                              `1` = "Early Morning",
+                              `2` = "Morning",
+                              `3` = "Afternoon",
+                              `4` = "Evening",
+                              `5` = "Night",
+                              `6` = "Late Night",),
+                     DepTimeGroup = recode_factor(DepTimeGroup,
+                              `1` = "Early Morning",
+                              `2` = "Morning",
+                              `3` = "Afternoon",
+                              `4` = "Evening",
+                              `5` = "Night",
+                              `6` = "Late Night"
+                                                  ))
+
+
+```
+#### Handling missing values
+The variable ArrDelayNew will be used as an outcome variable in our analysis. Therefore, we need to remove any observations from our data set where this variable is NULL. This will only remove 1,980 observations from the dataset, still leaving us with 98,820 observations to analyze.
+
+```{r}
+#Remove NA for outcome variable ArrDelayNew
+PIT_2019_3 <- PIT_2019_2[!is.na(PIT_2019_2$ArrDelayNew), ]
+
+#After removing NAs for outcome variable, cancellation and divertion records are also removed. Hence we remove those columns also fron analysis
+
+PIT_2019_3 <- select(PIT_2019_3,-c(Cancelled, CancellationCode, Diverted))
+#summary(PIT_2019_3)
+
+#Removing single records which cause CV error due to absence in test or train data
+PIT_2019_3 <- PIT_2019_3[!(PIT_2019_3$OriginCity=="San Diego, CA"),]
+PIT_2019_3 <- PIT_2019_3[!(PIT_2019_3$OriginCity=="San Juan, PR"),]
+
+```
+#### Correlation Matrices
+Next, we will create correlation matrices to determine which variables are highly correlated with each other. This will allow us to exclude certain redundant variables from our model that would otherwise impede our interpretation. We have built multiple correlation matrices to try to identify the relationship between different variables. The correlation matrices are shown below. 
+
+```{r eval=TRUE, echo=FALSE, cache=TRUE}
+# Correlation matrix for different variables with stong correlation to remove from analysis 
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...) {
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- abs(cor(x, y, use = "complete.obs"))
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste0(prefix, txt)
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex.cor * r)
+}
+
+pairs(PIT_2019_3[, c("DepDelay", "DepDelayNew", "DepDel15", "DelDelGroup", "AdjDepTime", "DepTimeGroup")],
+      lower.panel = panel.cor)
+#DepDelay is correlated with DepDelayNew. As we are looking at delays, early departures are not important. So we will use DepDelayNew only.
+
+pairs(PIT_2019_3[, c("CarrierDelay", "WeatherDelay", "NasDelay", "DepDelayNew", "SecurityDelay", "LateAircraftDelay")],
+      lower.panel = panel.cor)
+# None are correlated. But all the delays put together is highly correlated with the Arrival delay. Moreover these variables will be available after the flight runs and not before. Hence they are not useful for prediction. All these variables will be dropped.
+
+pairs(PIT_2019_3[, c("AirTime", "Distance", "DistanceGroup", "CrsTimeElapsed","ActualTimeElapsed")],
+      lower.panel = panel.cor)
+#All the variables are highly correlated. So we will use Distance only and remove all other variables from this list.
+
+pairs(PIT_2019_3[, c("OriginID","OriginSeqID","OriginCityID", "Origin","OriginCity","OriginStAbbr","OriginStateFips", "OriginState" ,"OriginWac")],
+      lower.panel = panel.cor)
+
+#OriginID, OriginSeqID, Origincity and Origin are correlated. We will use Origin. OriginStAbbr, OriginStateFips, OriginState are correlated. State wide data is not required as City level data is being used.
+
+pairs(PIT_2019_3[, c("DestID", "DestSeqID", "DestCityID","Dest","DestCity","DestStateAbbr","DestStateFips","DestState","DestWac")],
+      lower.panel = panel.cor)
+# We will use DestCity, Remaining are highly correlated.
+
+pairs(PIT_2019_3[, c("CrsArrTime","ArrTime","ArrDelay" ,"ArrDelayNew","ArrDel15","ArrDelayGroup", "AdjArrTime", "ArrTimeGroup")],
+      lower.panel = panel.cor)
+#ArrTime is correlated with CrsArrTime. So we will take ArrTime only. ArrDelay is correlated with ArrDelayNew. As we are looking at delays, early arrivals are not important. So we will use ArrDelayNew. ArrDelayGroup is highly correlated. So we will remove it.
+
+```
+
+
+```{r cache=TRUE}
+#Final selected variables
+pairs(PIT_2019_3[, c("Month", "DayOfMonth","DayOfWeek", "Carrier","OriginCity", "DestCity", "AdjDepTime" ,"DepDelayNew", "AdjArrTime", "ArrDelayNew" ,"Distance" )],
+      lower.panel = panel.cor)
+
+#Quarter and Month are highly correlated. Quarter will be removed from analysis. ArrDelayNew and DepDelayNew are also highly correlated. So in analysis for arrial delay, departure delay will not be used and vice versa.
+```
+
+#### Excluding Variables
+
+**Correlated variables**
+
+The matrices above show that some variables have strong correlations (>0.7) with each other (like DepDelay, DepDelayNew, DepDel15, DelDelGroup). While DepDelay column has departure delay data with negative values for early departure, DepDelayNew column coverts all early departures to 0 as the consideration here is about the delays only. Hence DepDelayNew column will be considered. The same is true for variables related to arrival delays. For arrival delay, ArrDelayNew column will be considered.
+
+Similarly the columns like OriginID,OriginSeqID,OriginCityID,Origin are highly correlated with OriginCity. Hence OriginCity will be used in our analysis. 
+
+**Variables not available before the event of delay**
+
+It was observed that the arrival delay is highly correlated with the departure delay. So, if a flight is delayed during departure, there is high chances for the arrival also to be delayed. But the departure delay wont be available in advance for us to make a good prediction. Similarly delay information like "CarrierDelay", "WeatherDelay", "NasDelay", "SecurityDelay", "LateAircraftDelay" add up to Departure and Arrival delay. Adding these variables in the model will fit the past data well. But it wont help in predicting the future delay as we wont know if these delay will happen for the flights.   
+
+
+Due to the correlation, we have reduced our dataset to include only the following variables:
+
+Month, DayOfMonth, DayOfWeek, Carrier,OriginCity, DestCity, DepDelayNew, ArrDelayNew ,Distance, ArrTimeGroup, DepTimeGroup, AdjDepTime, AdjArrTime, CarrierDelay, WeatherDelay, NasDelay, SecurityDelay, LateAircraftDelay.
+
+```{r}
+# Variables selected for analysis
+PIT_2019_final <- PIT_2019_3[c("Month", "DayOfMonth","DayOfWeek", "Carrier","OriginCity", "DestCity", "DepDelayNew", "ArrDelayNew" ,"Distance", "ArrTimeGroup", "DepTimeGroup", "AdjDepTime", "AdjArrTime", "CarrierDelay", "WeatherDelay", "NasDelay", "SecurityDelay", "LateAircraftDelay")]
+
+```
+
+#### Division of Datasets
+The final step of our cleaning process is to divde the dataset into two: One dataset corresponding to arrivals in the Pittsburgh airport and another dataset corresponding to departures from the Pittsburgh airport. This disaggregation is necessary so that our analyses only take into account the relevant data.
+
+These datasets will be called "PIT_2019_ArrivePit" and "PIT_2019_DepartPit", respectively. The majority of this report will focus on Arrival Delays.
+
+```{r, echo=FALSE}
+#Splitting dataset into Pittsburgh arrivals and Pittsburgh departures
+
+PIT_2019_ArrivePit <- PIT_2019_final[ which(PIT_2019_final$DestCity =='Pittsburgh, PA'),]
+#summary(PIT_2019_ArrivePit)
+
+PIT_2019_ArrivePit.df <- as.data.frame(PIT_2019_ArrivePit)
+#summary(PIT_2019_ArrivePit.df)
+
+PIT_2019_ArrivePit.df$ArrDelayNewLog <- log(PIT_2019_ArrivePit.df$ArrDelayNew + 1)
+
+PIT_2019_DepartPit <- PIT_2019_final[ which(PIT_2019_final$OriginCity =='Pittsburgh, PA'), ]
+#summary(PIT_2019_DepartPit)
+
+PIT_2019_DepartPit.df <- as.data.frame(PIT_2019_DepartPit)
+#summary(PIT_2019_DepartPit.df)
+
+```
+## 3. Exploratory Data Analysis
+In this section of the report, we produce various visualizations to help us gain a better understanding of the data. Primarily, we will look at different distributions of the data as well as plots that show us the relationship between two or three different variables. The purpose of these visualizations is to help us narrow our focus even further for when will start fitting models to the data.
+
+#### Violin Plots and Box Plots
+Let's create a violin plot and a box plot to see the distribution of late arrivals during each month of the year 2019. These are shown below.
+
+```{r}
+#Arrival Delay by Month
+ggplot(PIT_2019_ArrivePit.df, aes(x=ArrDelayNew)) + geom_histogram() + labs(title="Distributions of Delay Times", x="Delay Times (in minutes)", y="Frequency") + theme(legend.position="none")
+
+ggplot(PIT_2019_ArrivePit.df, aes(x=Month, y=ArrDelayNew, fill=Month)) + geom_boxplot() + labs(title="Distributions of Delay Times by Month", x="Month", y="Delay Times in Minutes", fill= "Month") + theme(legend.position="none")
+```
+
+**Interpretation:**
+
+The histogram above indicates that the distribution of our data is not normal. It is highly skewed to the right. Many of the observations have a delay time = 0, but there are also flights that have large delay times (of 1000 minutes or more), though these do not appear on the histogram because there are much fewer of them.
+
+The boxplots also show this skew, because most of the data is contained in the small boxes located at the bottom of the plot.
+
+Below, we will look at the distribution of the data only when considering flights that had any delay whatsoever (arrival delay > 0). If there is no delay, these flights will be excluded from the plots. This should result in slightly better looking plots.
+```{r}
+greater0 <- subset(PIT_2019_ArrivePit.df, ArrDelayNew > 0)
+
+#Arrival Delay by Month
+ggplot(greater0, aes(x=Month, y=ArrDelayNew, fill=Month)) + geom_violin() + labs(title="Distributions of Delay Times by Month", x="Month", y="Delay Times in Minutes", fill= "Month")
+
+ggplot(greater0, aes(x=Month, y=ArrDelayNew, fill=Month)) + geom_boxplot() + labs(title="Distributions of Delay Times by Month", x="Month", y="Delay Times in Minutes", fill= "Month")
+
+```
+**Interpretation:** 
+
+The plots do look somewhat better, but they are still not ideal for giving us a good picture of the distribution. This is again because the actual spread of the data is still so large compared to the range in which *most* of the data is located. We can resolve this by zooming in once more to a smaller range of the data.
+
+**This time, we will look only at flights that were delayed by > 0 minutes, but < = 60 minutes**
+
+```{r echo=FALSE}
+less60 <- subset(PIT_2019_ArrivePit.df, ArrDelayNew > 0 & ArrDelayNew <=60)
+
+#Arrival Delay by Month and Day of Week
+ggplot(less60, aes(x=Month, y=ArrDelayNew, fill=Month)) + geom_boxplot() + labs(title="Distributions of Delay Times by Month", x="Month", y="Delay Times in Minutes", fill= "Month")
+
+#Arrival Delay by Day of Week
+ggplot(less60, aes(x=DayOfWeek, y=ArrDelayNew, fill=DayOfWeek)) + geom_violin() + labs(title="Distributions of Delay Times by Day of the Week", x="Day of the Week", y="Delay Times in Minutes", fill= "Day")
+```
+**Interpretation:**
+
+The boxplot and violin plot above are useful for visualizing the distribution of delay times across different categories (Day of the Week and Month). The violin plot for Day of the Week shows that the distribution of delay times are very similar across the different days. Therefore, we might not expect this feature to have much predictive power. The boxplot for Month shows slight variations in delay times. For example, June and July appear to have slightly larger medians, while March and September seem to have slightly smaller medians. There are also slight differences in occurences that are deemed outliers, represented as dots on the top of the plot.
+
+```{r pressure, echo=FALSE}
+#Carrier and Day of Month
+
+ggplot(less60, aes(x=Carrier, y=ArrDelayNew, fill=Carrier)) + geom_boxplot() + labs(title="Distributions of Delay Times by Airline Carrier", x="Airline Carrier", y="Delay Times in Minutes", fill= "Airline Carrier") + scale_y_continuous(limits=c(0, 60)) + theme(legend.position="none", axis.text.x=element_text(angle=90))
+
+ggplot(less60, aes(x=DayOfMonth, y=ArrDelayNew)) + geom_boxplot() + labs(title="Distributions of Delay Times by Day of the Month", x="Day of the Month", y="Delay Times in Minutes") + scale_y_continuous(limits=c(0, 60))
+```
+
+**Interpretation:**
+
+These boxplots show perhaps slightly more variation in the distributions than the previous categories. From these visualizations we might expect Carrier or Day of the Month to have signficance in models that we fit. The differences do not appear so profound to suggest that these features would have a large impact on the outcome variable.
+
+**Next, we will expand the range to look at delays that are > 0 minutes but <= 120 minutes.**
+
+
+```{r warning=FALSE}
+#Arrival Delay by Carrier
+greater60 <- subset(PIT_2019_ArrivePit.df, ArrDelayNew > 0 & ArrDelayNew <= 120)
+
+ggplot(greater60, aes(x=DayOfWeek, y=ArrDelayNew, fill=DayOfWeek)) + geom_boxplot() + labs(title="Distributions of Delay Times by Day of the Week", x="Day of the Week", y="Delay Times in Minutes", fill= "Day") + theme(legend.position="none")
+
+ggplot(greater60, aes(x=Carrier, y=ArrDelayNew, fill=Carrier)) + geom_boxplot() + labs(title="Distributions of Delay Times by Airline Carrier", x="Airline Carrier", y="Delay Times in Minutes", fill= "Airline Carrier") + theme(legend.position="none", axis.text.x=element_text(angle=90))
+
+car2 <- subset(PIT_2019_ArrivePit.df , ArrDelayNew>0 & ArrDelayNew<=120)
+ggplot(car2, aes(x=ArrDelayNew, fill="Steelblue")) + geom_density(binwidth=15) + facet_wrap(~Carrier) + theme(legend.position="none", panel.spacing=unit(0.1, "lines")) + labs(x="Delay Time", y="Frequency")
+
+```
+**Interpretation:**
+
+The revised plots don't provide too many new insights compared to the last set. However, we may begin to see a few more differences in the distributions for airline carrier, which seems to be emerging as perhaps one of the more influential discriminators of delay times among the factors we are examining in this group. For example, we see the median delay time for ExpressJet seems to be quite high compared to others. Similarly, Alaska has outlier delay times that nearly overlap with the 3rd quartile (75th percentile) for ExpressJet. The 3rd quartiles for carriers Alaska, Delta, and Spirit are not much larger than the median of carrier ExpressJet. Interestingly, however, the entire spread of ExpressJet is small relative to other carriers and it has no outliers. Moving forward with our analysis, airline carrier will likely be a factor that we will want to look at more closely in order to determine if interactions are occuring that can be used to help predict delays.
+
+*Note--We also produced density plots for each of the carriers that show the relative frequency of delay times. These are essentially very similar to violin plots, but they split the violin shape in half and rotate the distribution 90 degrees. Carriers with the tallest peaks on the left side (like DL and WN) have more frequent short delays and less frequent long delay, while those with smaller peaks (9E, EV, B6) have more frequent longer delays.*
+
+When we continue to take a closer look at the distributions for Day of the Week, we continue to see very few differences. This will likely be a feature that will not be significant in our models.
+
+#### Scatterplots
+We also produced simple scatterplot distributions for arrival delays and departure delays by carrier, as shown below.
+
+```{r}
+less120a <- subset(PIT_2019_ArrivePit.df, ArrDelayNew > 0 & ArrDelayNew < 180)
+less120d <- subset(PIT_2019_DepartPit.df, DepDelayNew > 0 & DepDelayNew < 180)
+
+ggplot(data=less120a, aes(x=ArrDelayNew, y=Carrier, color=ArrTimeGroup)) + geom_point(alpha=0.8) + labs(x="Number of Minutes Delayed", fill="Scheduled Arrival Time", title="Arrival Delays by Carrier and Arrival Time")
+
+ggplot(data=less120d, aes(x=DepDelayNew, y=Carrier, color=DepTimeGroup)) + geom_point(alpha=0.8) + labs(x="Number of Minutes Delayed", fill="Scheduled Departure Time", title="Departure Delays by Carrier and Departure Time")
+
+```
+
+**Interpretation:**
+
+A general trend that can be seen in this data is that early morning flights (orange colors) tend to appear more on the left of the scatterplot (when delay time is low), afternoon and evening flights (green and blue) tend to appear more in the middle of each scatter plot, and night
+and late nigt flights (purple and pink) tend to appear furthest to the right of each scatter plot. This means that it seems that as the departure or arrival time is scheduled later and later in the day, the delays also seem to become longer and longer in general.
+
+Let's see if there is another good way to visualize this trend.
+
+```{r}
+ggplot(data=PIT_2019_ArrivePit.df, aes(x=AdjArrTime, y=ArrDelayNew, color=ArrTimeGroup)) + geom_point(alpha=0.5) +labs(x="Time of Arrival (Adjusted) over 24-Hour Day",y="Arrival Delay (in Minutes)", title="Arrival Delay by Arrival Time")
+
+ggplot(data=PIT_2019_DepartPit.df, aes(x=AdjDepTime, y=DepDelayNew, color=DepTimeGroup)) + geom_point(alpha=0.5) +labs(x="Time of Departure (Adjusted) over 24-Hour Day",y="Departure Delay (in Minutes)", title="Departure Delay byDeparture Time")
+```
+**Interpretation:**
+
+What both of these scatterplots illustrate is that, in general, as time moves from morning to afternoon to night, delays get longer. Flights scheduled for the early morning have shorter delays than those scheduled later in the day. Though most of the data falls within a 24-hour, the data was adjusted to account for delays that caused the flight to be pushed to the next day. Any flights that were pushed to the next day received an Arrival or Departure time of 24 hours + the new arrival or departure time. Furthermore, the 24-hour day is shown as starting at 5am here (or 500 on the x-axis). Therefore, flights that are shown to the right of 2900 on the x-axis (500 + 2400), were flights that were delayed to the next day.
+
+
+#### Heatmaps
+We also explored a number of heatmaps to try to identify relationships between categorical variables. These heatmaps are shown below.
+
+```{r}
+arr1 <- subset(PIT_2019_ArrivePit.df, ArrDelayNew > 0 & ArrDelayNew <300 )
+ggplot(arr1, aes(x=Month, y=OriginCity, fill=ArrDelayNew)) + geom_tile() + scale_fill_gradient(low="white", high="red") +labs(fill="Arr. Delay (mins)") + theme(legend.title=element_text(size=6), legend.text = element_text(size=5), axis.text.x=element_text(size=5), axis.text.y=element_text(size=5))
+
+ggplot(arr1, aes(x=ArrTimeGroup, y=Carrier, fill=ArrDelayNew)) + geom_tile() + scale_fill_gradient(low="white", high="red") +labs(x="Scheduled Time of Arrival", fill= "Arr. Delay (mins)") + theme(legend.title=element_text(size=6), legend.text = element_text(size=5), axis.text.x=element_text(size=5), axis.text.y=element_text(size=5))
+
+ggplot(arr1, aes(x=ArrTimeGroup, y=OriginCity, fill=ArrDelayNew)) + geom_tile() + scale_fill_gradient(low="white", high="red") +labs(x="Scheduled Time of Arrival", fill= "Arr. Delay (mins)") + theme(legend.title=element_text(size=6), legend.text = element_text(size=5), axis.text.x=element_text(size=5), axis.text.y=element_text(size=5))
+
+```
+
+**Interpretation:**
+
+These heatmaps can help us to identify where interactions between categorical variables may be signficant. The spots on the heatmap that are brightest red indicate combinations of categorical variables that produced longer delays in arrival and departure compared to combinations producing lighter pink or white colors.
+
+This reveals that some airline carriers are more likely to have longer delays for some of their flights into Pittsburgh from certain cities. Likewise, there are "hotspots" for Origin City and Month, and Month and Carrier.
+
+**Findings from Exploratory Data Analysis:**
+There seem to be a number of variables that correlate to flight delays. The variables that we have seen differences for include Carrier and Arrival Time and Departure time (when adjusted for carrying over to the next day.) Likewise, there seem to be some interactions between categorical variables which cause certain combinations of features to yield longer delays. We will try to accomodate these findings in our models moving forward.
+
+## 4. Fitting our Models
+Since we are trying to *predict* or *forecast* delays, and not trying to classify delays, we will be using time series forecasting methods rather than classification methods.
+
+We will use linear regression (and glm) as well as a regression tree with bagging and boosting.
+
+```{r}
+# Regression plot for Arrival Delay and Departure delay
+
+qplot(data = PIT_2019_ArrivePit.df, x = DepDelayNew, y = ArrDelayNew,
+      xlab = "Departure Delay", ylab = "Arrival Delay") + stat_smooth(method = "lm")
+```
+
+**Relationship between Arrival and Departure delay:**
+
+As discussed in earlier sections, the Arrival and Departure delay are highly correlated. So we do not include departure delay while regressing for the arrival delay and vice versa.
+
+```{r}
+
+# Define train and test set
+set.seed(4)
+train <- sample(1:nrow(PIT_2019_ArrivePit.df), nrow(PIT_2019_ArrivePit.df)/2)
+test <- PIT_2019_ArrivePit.df$ArrDelayNew[-train]
+
+```
+
+
+```{r cache=TRUE}
+#Multiple Linear Regression
+
+#Arrival delay - with all delays
+lm.fit.arrdelay.1 <-lm(ArrDelayNew ~ Month+ DayOfMonth + DayOfWeek + Carrier + OriginCity + DepDelayNew +Distance + AdjArrTime + CarrierDelay + WeatherDelay + NasDelay + SecurityDelay + LateAircraftDelay, data = PIT_2019_ArrivePit.df, subset = train)
+#summary(lm.fit.arrdelay.1) 
+#summary(lm.fit.arrdelay.1)$r.sq
+
+#Arrival delay - with all delays other than DepDelayNew
+lm.fit.arrdelay.2 <-lm(ArrDelayNew ~ Month+ DayOfMonth + DayOfWeek + Carrier + OriginCity +Distance + AdjArrTime + CarrierDelay + WeatherDelay + NasDelay + SecurityDelay + LateAircraftDelay, data = PIT_2019_ArrivePit.df, subset = train)
+#summary(lm.fit.arrdelay.2) 
+#summary(lm.fit.arrdelay.2)$r.sq
+
+#Arrival delay - with only DepDelayNew
+lm.fit.arrdelay.3 <-lm(ArrDelayNew ~ Month+ DayOfMonth + DayOfWeek + Carrier + OriginCity + DepDelayNew +Distance + AdjArrTime, data = PIT_2019_ArrivePit.df, subset = train)
+#summary(lm.fit.arrdelay.3) 
+#summary(lm.fit.arrdelay.3)$r.sq
+
+#Arrival delay - without other delay variables
+
+lm.fit.arrdelay.4 <- lm(ArrDelayNew ~ Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance ,data = PIT_2019_ArrivePit.df, subset = train)
+summary(lm.fit.arrdelay.4)
+#summary(lm.fit.arrdelay.4)$r.sq
+
+#Arrival delay - without other delay variables, interaction terms for Carrier and OriginCity
+lm.fit.arrdelay.5 <- lm(ArrDelayNew ~ Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance + Carrier*OriginCity,data = PIT_2019_ArrivePit.df, subset = train)
+#summary(lm.fit.arrdelay.5)
+#summary(lm.fit.arrdelay.5)$r.sq
+
+#Arrival delay - without other delay variables, interaction terms for Month and DayOfMonth
+lm.fit.arrdelay.6 <- lm(ArrDelayNew ~ Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance + Month*DayOfMonth,data = PIT_2019_ArrivePit.df, subset = train)
+#summary(lm.fit.arrdelay.6)
+#summary(lm.fit.arrdelay.6)$r.sq
+
+#Arrival delay - without other delay variables, interaction terms for Carrier and OriginCity, Month and DayOfMonth
+lm.fit.arrdelay.7 <- lm(ArrDelayNew ~ Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance + Carrier*OriginCity + Month*DayOfMonth,data = PIT_2019_ArrivePit.df, subset = train)
+#summary(lm.fit.arrdelay.7)
+#summary(lm.fit.arrdelay.7)$r.sq
+
+#Departure delay
+lm.fit.depdelay.1 <- lm(DepDelayNew ~ Month + DayOfMonth + DayOfWeek + Carrier + DestCity + AdjDepTime + Distance ,data = PIT_2019_DepartPit.df)
+#summary(lm.fit.depdelay.1)
+#summary(lm.fit.depdelay.1)$r.sq
+```
+**Interpretation of Regressions**:
+
+The R2 values for Model with different set of independent variable are
+
+1. All the associated delays are included along with other variables. R square value = `r summary(lm.fit.arrdelay.1)$r.sq`
+
+2. All delays other than Departure delay is included along with other variables. R square value = `r summary(lm.fit.arrdelay.2)$r.sq`
+
+3. Only Departure delay is included along with other variables. R square value = `r summary(lm.fit.arrdelay.3)$r.sq`
+
+4. Other variables with none of the associated delays are included. R square value = `r summary(lm.fit.arrdelay.4)$r.sq`
+
+5. Other variables with interaction term for City and Carrier are included. R square value =`r summary(lm.fit.arrdelay.5)$r.sq`
+
+6. Other variables with interaction term for DayofMonth and Month are included. R square value =`r summary(lm.fit.arrdelay.6)$r.sq`
+
+From the above R square values, we can observe that the for predicting Arrival delay, the associated delay like departure delay, Security delay and weather delay provide more than 90% R-squared (even 99%). But these variables are highly correlated and add up to the arrival delay. Hence they are not better predictor. When use the other variables as in option 4, the R-squared value is below 10%. Adding the interaction terms increases R-squared slighly and explain the model better. So a model like regression trees could give between prediction as they take into account the interactions. 
+We will now use subset selection methods to find the best set of variables to use. using the other associated delays for model selection will lead us to select just these variables alone. So the other associated delays are not going to be included for our model selection process.
+
+```{r}
+#Diagnostic plots
+
+plot(lm.fit.arrdelay.4)
+```
+**Residual plots**
+
+The Residual vs fitted plot shows that the data is concentrated in an area and there seems not be no clear trend. As there is no clear pattern in the residual plot the model may not have much scope for improvmeent. The Q-Q plot shows the right skew in the data. The leverage plot shows that there are no record above the cook's line which denotes that there are no outliers. But in Residual Vs Fitted value chart we can see that there are few observations which are quite spread out to the top right corner, but majority concentrated at the bottom.
+
+The inconsistencies in the residual plots show that regression may not be the best model for this case in predicting the outcomes.
+
+**Model Selection**
+
+```{r warning=FALSE}
+# Forward Stepwise selection
+regfit.fwd=regsubsets(ArrDelayNew∼ Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance ,data = PIT_2019_ArrivePit.df ,nvmax =7,method ="forward", subset=train)
+reg.summary.fwd =summary (regfit.fwd)
+reg.summary.fwd$rsq
+
+par(mfrow =c(2,2))
+plot(reg.summary.fwd$rss ,xlab=" Number of Variables ",ylab=" RSS",type="l")
+plot(reg.summary.fwd$adjr2 ,xlab =" Number of Variables ", ylab=" Adjusted RSq",type="l")
+
+
+# Backward Stepwise selection
+regfit.bwd=regsubsets(ArrDelayNew∼ Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance ,data = PIT_2019_ArrivePit.df ,nvmax =7,method ="backward", subset=train)
+reg.summary.bwd =summary (regfit.bwd)
+reg.summary.bwd$rsq
+
+par(mfrow =c(2,2))
+plot(reg.summary.bwd$rss ,xlab=" Number of Variables ",ylab=" RSS",type="l")
+plot(reg.summary.bwd$adjr2 ,xlab =" Number of Variables ", ylab=" Adjusted RSq",type="l")
+```
+
+**Interpretation:**
+
+It can be observed with both Forward and Backward selection, the Adjusted R square is increasing for adding each variable and hence all the variables are going to be used for the linear regression model.
+
+
+```{r warning=FALSE}
+predict.regsubsets =function (object ,newdata ,id ,...){
+  form=as.formula (object$call [[2]])
+  mat=model.matrix (form ,newdata )
+  coefi =coef(object ,id=id)
+  xvars =names (coefi )
+  mat[,xvars ]%*% coefi
+}
+
+k=10
+set.seed (1)
+folds=sample (1:k,nrow(PIT_2019_ArrivePit.df),replace =TRUE)
+cv.errors =matrix (NA ,k,7, dimnames =list(NULL , paste (1:7) ))
+
+for(j in 1:k){
+  best.fit =regsubsets (ArrDelayNew∼Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance,data=PIT_2019_ArrivePit.df [folds !=j,],nvmax =7,method ="forward", subset=train)
+  for(i in 1:7) {
+  pred=predict (best.fit ,PIT_2019_ArrivePit.df [folds ==j,], id=i)
+  cv.errors [j,i]=mean( (PIT_2019_ArrivePit.df$ArrDelayNew[folds ==j]-pred)^2)
+}
+}
+mean.cv.errors =apply(cv.errors ,2, mean)
+mean.cv.errors
+
+par(mfrow =c(1,1))
+plot(mean.cv.errors ,type='b')
+```
+
+**Interpretation:**
+
+From the results of cross validation, it can be noticed that the Mean Cross validation error is lowest for 7 variable model. But it may be noted that the reduction in Mean cv error comes to 1630 only and that is quite high.
+
+```{r warning=FALSE}
+
+# Best variables as per cross validation
+reg.best=regsubsets (ArrDelayNew∼Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance,data=PIT_2019_ArrivePit.df , nvmax =7,method ="forward", subset=train)
+coef(reg.best ,7)
+```
+
+**Interpretation:**
+
+It may be noted that running Cross validation with categorical independent variable has 2 major limitations. 1. If the train data does not include all the levels of a factor then the cross validaiton throws an error. We do not have control over the splitting of records into test and train datasets. 2. Cross validation considers all the levels in a factor as seperate variables and provides them for best model fit. This is not usable. Two ways to handle this is to do indicator variables for each factor levels and code certain factors as continuous variables. As the work around is complex and the variables by themselves have very less predictive power, we are not going to rely on cross validation for model fit.
+
+**Final Multiple Regression Model:**
+
+```{r}
+lm.fit.arrdelay.final <- lm(ArrDelayNew ~ Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance ,data = PIT_2019_ArrivePit.df, subset = train)
+#summary(lm.fit.arrdelay.4)
+summary(lm.fit.arrdelay.4)$r.sq
+```
+
+**Cross validation to check test error**
+
+Due to the limitation in using Cross validation with factor variables, we will use a cross validation using validation set approach for 5 different samples. While using k-fold and LOOC approach, the factor levels are being left out in the train sample, leading to error. Hence the validation set approach is being followed.
+
+```{r,warning = FALSE }
+# Cross validation for calculating test error of linear regression using Validation set approach
+
+
+#CV 1: For only the variables non-correlated with the outcome
+
+cv.crossvalid1 <- rep(0,100)
+for (i in 1:100) {
+  set.seed(10)
+  # Form a random split
+  rand.split <- sample(cut(1:nrow(PIT_2019_ArrivePit.df), breaks = 2, labels = FALSE))
+  # Fit model on first part
+  lm.fit.arrdelay.train <- lm(ArrDelayNew ~ Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + Distance, data = PIT_2019_ArrivePit.df[rand.split == 1,])
+  # Predict on the second part
+  lm.fit.arrdelay.pred <- predict(lm.fit.arrdelay.train, newdata = PIT_2019_ArrivePit.df[rand.split == 2, ])
+  # Calculate MSE on the second part
+  cv.crossvalid1[i] <- mean((PIT_2019_ArrivePit.df$ArrDelayNew[rand.split == 2] - lm.fit.arrdelay.pred)^2)
+}
+mean(cv.crossvalid1)
+
+#CV 2:For the model with variables non-correlated with the outcome and departure delay (highly correlated)
+
+cv.crossvalid2 <- rep(0,100)
+for (i in 1:100) {
+  set.seed(10)
+  # Form a random split
+  rand.split <- sample(cut(1:nrow(PIT_2019_ArrivePit.df), breaks = 2, labels = FALSE))
+  # Fit model on first part
+  lm.fit.arrdelay.train <- lm(ArrDelayNew ~ Month + DayOfMonth + DayOfWeek + Carrier + OriginCity + AdjArrTime + DepDelayNew + Distance, data = PIT_2019_ArrivePit.df[rand.split == 1,])
+  # Predict on the second part
+  lm.fit.arrdelay.pred <- predict(lm.fit.arrdelay.train, newdata = PIT_2019_ArrivePit.df[rand.split == 2, ])
+  # Calculate MSE on the second part
+  cv.crossvalid2[i] <- mean((PIT_2019_ArrivePit.df$ArrDelayNew[rand.split == 2] - lm.fit.arrdelay.pred)^2)
+}
+mean(cv.crossvalid2)
+
+```
+
+**Interpretation of Linear regression cross validation result**
+
+It can be observed that the Cv test error for the linear regression model with departure delay comes to `r mean(cv.crossvalid2)` which is very good. But as discussed earlier, Departure delay is highly correlated with the arrival delay and we cannot know in advance if departure delay will happen for a flight. 
+
+But for the model with no uncorrelated variables such as Departure delay, weather delay, etc and which includes only  travel month, Day Of the Month, Day Of the Week, Carrier, OriginCity, arriva time and Distance seem to be poor in predicting delay in arrival times. The Cv test error is `r mean(cv.crossvalid1)`
+
+This shows that the features which are readily available such as travel date, flight carrier, origin and destination are poor predictors of flight delay. May be variables such as temperature, humidity, wind speed, precipitation, which have influence on weather delay and other aiport related parameters can be a good predictor. But we do not have those data available with us.
+
+
+**Regression trees**
+
+Regression trees are very good in capturing interaction effects among the independent variables in a model. In the model developed using linear regression, we noticed that the once we added the interaction effects, the R square value increases and the RSS value reduced. So it is likely that a model which takes into consideration interaction effects might be a better predictor. Regression tree is a good option.
+
+While exploring the regression tree model, it was observed that due to computational complexity trees cant be built with factor variables with more than 32 levels. We have the Origin city and destination city which have 48 levels. This limits us from using regression tree. But the random forest package has provision for running trees with higher number of levels allowed. Therefore we will use random forest package to use bagged and boosted trees for analysis.
+
+
+```{r cache=TRUE}
+#Bagged trees
+
+#Subset data to include only the columns which are not correlated and available in advance for prediction.
+PIT_2019_ArrivePit_sub.df <- subset( PIT_2019_ArrivePit.df, select = c(Month, DayOfMonth, ArrDelayNew, DayOfWeek, Carrier, OriginCity, AdjArrTime, Distance) )
+
+# Bagged trees using random forest where m=p
+bag.PitFlight =randomForest(ArrDelayNew∼.,data=PIT_2019_ArrivePit_sub.df ,subset =train ,
+mtry=7, importance =TRUE)
+bag.PitFlight
+
+```
+
+The bagged regression tree has provided a mean squared residual of `r bag.PitFlight$mse` which is much lower than the mean squared error obtained through multiple linear regression. This is mainly due to the tree model's ability to capture interaction effects. Moreover as seen from the residual plots, the relationship between residuals and the fitted values for the regression was not linear. So models like trees were better options. 
+
+The bagged tree model for which m=p, i.e. 7 in our case explains around 44% of the variation in the Arrival delay.  
+
+
+```{r cache=TRUE}
+#Bagged trees test error
+yhat.bag = predict (bag.PitFlight ,newdata =PIT_2019_ArrivePit_sub.df [-train ,])
+PitFlight.test <-PIT_2019_ArrivePit_sub.df[-train,"ArrDelayNew"]
+plot(yhat.bag , PitFlight.test)
+abline (0,1)
+mean(( yhat.bag -PitFlight.test)^2)
+```
+
+The mean squared test error for bagged trees is `r mean(( yhat.bag -PitFlight.test)^2)`, which is higher than the train error. However, the MSE is much lower when compared to the linear regression model.
+
+```{r cache=TRUE}
+# Random forest
+
+rf.PitFlight =randomForest(ArrDelayNew ∼.,data=PIT_2019_ArrivePit_sub.df ,subset =train , mtry=3, importance =TRUE)
+# Random forest test error
+yhat.rf = predict (rf.PitFlight ,newdata =PIT_2019_ArrivePit_sub.df [-train ,])
+mean(( yhat.rf - PitFlight.test)^2)
+
+importance(rf.PitFlight)
+varImpPlot (rf.PitFlight)
+```
+
+**Interpretation of Random Forest:**
+
+The mean squared error for the test dataset is `r mean(( yhat.rf - PitFlight.test)^2)`, which is slightly more than the bagged trees. Again, though, this is much lesser than the linear regression model. The variable which explains the variation the most is the Adjusted Arrival Time (AdjArrTime), followed by Origin City, Carrier, Month, and Distance.
+
+```{r cache=TRUE}
+# Boosting
+boost.PitFlight =gbm(ArrDelayNew∼.,data=PIT_2019_ArrivePit_sub.df [train ,], distribution=
+"gaussian",n.trees =5000 , interaction.depth =4)
+summary(boost.PitFlight)
+
+yhat.boost=predict (boost.PitFlight ,newdata =PIT_2019_ArrivePit_sub.df [-train ,],
+n.trees =5000)
+mean(( yhat.boost -PitFlight.test)^2)
+
+boost.PitFlight =gbm(ArrDelayNew ∼.,data=PIT_2019_ArrivePit_sub.df[train ,], distribution= "gaussian", n.trees =5000, interaction.depth =4, shrinkage =0.2, verbose =F)
+yhat.boost = predict (boost.PitFlight ,newdata =PIT_2019_ArrivePit_sub.df[-train ,],
+n.trees =5000)
+mean(( yhat.boost - PitFlight.test)^2)
+```
+
+**Interpretation:**
+
+The mean squared error produced from this approach is `r mean(( yhat.boost -PitFlight.test)^2)`. Again, this is similar to what we obtained from the Random Forest method. 
+
+**GLM With Forward Selection:**
+
+```{r}
+PIT_2019_ArrivePit.df <- select(PIT_2019_ArrivePit.df,-c(DestCity))
+glm.fit = glm(ArrDelayNew~., data = PIT_2019_ArrivePit.df, subset=train)
+
+kable(data.frame(summary(glm.fit)$coef[summary(glm.fit)$coef[,4]<= 0.05, 1:4]))
+
+summary(glm.fit)
+
+set.seed(1)
+train <- sample(1:nrow(PIT_2019_ArrivePit.df), nrow(PIT_2019_ArrivePit.df)/2)
+test <- PIT_2019_ArrivePit.df$ArrDelayNew[-train]
+
+#Arrival Delay
+fwd.subset1 <- regsubsets(ArrDelayNew~., data = PIT_2019_ArrivePit.df, subset=train, nbest = 1, nvmax = 8, method = "forward", really.big = TRUE)
+kable(coef(fwd.subset1, id = 2))
+kable(coef(fwd.subset1, id = 4))
+kable(coef(fwd.subset1, id = 8))
+```
+
+**Interpretation:**
+
+The signficance of the coefficients from the GLM appear to be pretty similar to the signficance obtained from the linear regression. The additive model doesn't perform any better than the linear regression model.
+
+**R-squared, RSS, AIC, BIC**
+
+```{r}
+fwd.plot <- summary(fwd.subset1)
+plot(fwd.plot$rsq, xlab = "Number of Variables", ylab = "R-Squared")
+
+plot(fwd.plot$rss, xlab = "Number of Variables", ylab = "RSS")
+
+plot(fwd.plot$cp, xlab = "Number of Variables", ylab = "AIC (Mallow's Cp)")
+
+plot(fwd.plot$bic, xlab = "Number of Variables", ylab = "BIC")
+```
+
+**Interpretation:**
+
+The four plots that are produced show model accuracy increasing with model size/complexity. R-squared increases and RSS decreases for each additional feature added to the model. AIC and BIC both decrease for each additional feature added to the model.
+
+
+# 5. Comparison to 2006 Data
+
+Cleaning the 2006 Data
+
+```{r warning=FALSE}
+PIT_2006_raw <- read_excel("all_PIT_2006.xlsx")
+#View(PIT_2006_Raw)
+PIT_2006_1 <- select(PIT_2006_raw, -c(Year, Quarter, AirlineID, UniqueCarrier,FlightDate, Flights, FlightNum, TailNum, ActualElapsedTime, ArrDelSys15, ArrDelSys30, AirTime, ArrTimeBlk, DepDelSys15, DepDelSys30, DepTimeBlk, OriginState, OriginStateFips, OriginWac, DestState, DestStateFips, DestStateName, DestWac, TaxiIn, TaxiOut, WheelsOff, WheelsOn, CancellationCode, CarrierDelay, WeatherDelay, NASDelay,SecurityDelay,LateAircraftDelay))
+
+#Convert to factors
+PIT_2006_2 <- PIT_2006_1
+
+PIT_2006_2$Month <- as.factor(PIT_2006_2$Month)
+levels(PIT_2006_2$Month) <- c("Jan", "Feb", "Mar", "Apr", "May", "June", "July", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+PIT_2006_2$DayOfWeek <- as.factor(PIT_2006_2$DayOfWeek)
+levels(PIT_2006_2$DayOfWeek) <- c("Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun")
+
+PIT_2006_2$Carrier <- as.factor(PIT_2006_2$Carrier)
+levels(PIT_2006_2$Carrier) <- c("JetBlue", "Continental", "Delta", "Atlantic", "Frontier", "Envoy", "Northwest", "PSA", "SkyWest", "AirBridge", "United", "US Airways", "Southwest", "ExpressJet", "Mesa")
+
+PIT_2006_2$DayofMonth <- as.factor(PIT_2006_2$DayofMonth)
+PIT_2006_2$Carrier <- as.factor(PIT_2006_2$Carrier)
+PIT_2006_2$Origin <- as.factor(PIT_2006_2$Origin)
+PIT_2006_2$OriginCityName <- as.factor(PIT_2006_2$OriginCityName)
+PIT_2006_2$Dest <- as.factor(PIT_2006_2$Dest)
+PIT_2006_2$DestCityName <- as.factor(PIT_2006_2$DestCityName)
+PIT_2006_2$Diverted <- as.factor(PIT_2006_2$Diverted)
+PIT_2006_2$DistanceGroup <- as.factor(PIT_2006_2$DistanceGroup)
+
+#Create Adjusted Arrival and Departure Times (Earlier than 5:00am)
+
+PIT_2006_2 <- mutate(PIT_2006_2, AdjArrTime = ifelse(ArrTime %in% 0:500, ArrTime+2400,ArrTime)) #ifelse(CrsDepTime %in% 2000:2400 & ArrTime %in%500:1600, ArrTime+2400, ArrTime)))
+
+PIT_2006_2 <- mutate(PIT_2006_2, AdjDepTime = ifelse(DepTime %in% 0:500, DepTime+2400,DepTime)) 
+#ifelse(CrsArrTime %in%2000:2400 & DepTime %in%500:1600, DepTime+2400, ArrTime)))
+
+#Create Arrival and Depature Time Factors
+PIT_2006_2$ArrTimeGroup[PIT_2006_2$ArrTime >=500 & PIT_2006_2$ArrTime <900] <- "Early Morning"
+PIT_2006_2$ArrTimeGroup[PIT_2006_2$ArrTime >=900 & PIT_2006_2$ArrTime <1300] <- "Morning"
+PIT_2006_2$ArrTimeGroup[PIT_2006_2$ArrTime >=1300 & PIT_2006_2$ArrTime <1700] <- "Afternoon"
+PIT_2006_2$ArrTimeGroup[PIT_2006_2$ArrTime >=1700 & PIT_2006_2$ArrTime <2100] <- "Evening"
+PIT_2006_2$ArrTimeGroup[PIT_2006_2$ArrTime >=2100 & PIT_2006_2$ArrTime <2500] <- "Night"
+PIT_2006_2$ArrTimeGroup[PIT_2006_2$ArrTime >=00 & PIT_2006_2$ArrTime <100] <- "Night"
+PIT_2006_2$ArrTimeGroup[PIT_2006_2$ArrTime >=100 & PIT_2006_2$ArrTime <500] <- "Late Night"
+
+PIT_2006_2$DepTimeGroup[PIT_2006_2$DepTime >=500 & PIT_2006_2$DepTime <900] <- "Early Morning"
+PIT_2006_2$DepTimeGroup[PIT_2006_2$DepTime >=900 & PIT_2006_2$DepTime <1300] <- "Morning"
+PIT_2006_2$DepTimeGroup[PIT_2006_2$DepTime >=1300 & PIT_2006_2$DepTime <1700] <- "Afternoon"
+PIT_2006_2$DepTimeGroup[PIT_2006_2$DepTime >=1700 & PIT_2006_2$DepTime <2100] <- "Evening"
+PIT_2006_2$DepTimeGroup[PIT_2006_2$DepTime >=2100 & PIT_2006_2$DepTime <2500] <- "Night"
+PIT_2006_2$DepTimeGroup[PIT_2006_2$DepTime >=00 & PIT_2006_2$DepTime <100] <- "Night"
+PIT_2006_2$DepTimeGroup[PIT_2006_2$DepTime >=100 & PIT_2006_2$DepTime <500] <- "Late Night"
+
+PIT_2006_2$ArrTimeGroup <- as.factor(PIT_2006_2$ArrTimeGroup)
+PIT_2006_2$DepTimeGroup <- as.factor(PIT_2006_2$DepTimeGroup)
+
+PIT_2006_2 <- mutate(PIT_2006_2,
+                     ArrTimeGroup = recode_factor(ArrTimeGroup, 
+                              `1` = "Early Morning",
+                              `2` = "Morning",
+                              `3` = "Afternoon",
+                              `4` = "Evening",
+                              `5` = "Night",
+                              `6` = "Late Night",),
+                     DepTimeGroup = recode_factor(DepTimeGroup,
+                              `1` = "Early Morning",
+                              `2` = "Morning",
+                              `3` = "Afternoon",
+                              `4` = "Evening",
+                              `5` = "Night",
+                              `6` = "Late Night"
+                                                  ))
+
+PIT_2006_3 <- PIT_2006_2[!is.na(PIT_2006_2$ArrDelay), ]
+
+#After removing NAs for outcome variable, cancellation and divertion records are also removed. Hence we remove those columns also fron analysis
+
+PIT_2019_3 <- select(PIT_2006_3,-c(Cancelled, Diverted))
+#summary(PIT_2019_3)
+
+
+PIT_2006_ArrivePit <- PIT_2006_3[ which(PIT_2006_3$DestCityName =='Pittsburgh'),]
+#summary(PIT_2019_ArrivePit)
+
+PIT_2006_ArrivePit.df <- as.data.frame(PIT_2006_ArrivePit)
+#summary(PIT_2019_ArrivePit.df)
+
+PIT_2006_DepartPit <- PIT_2006_3[ which(PIT_2006_3$OriginCityName =='Pittsburgh'), ]
+#summary(PIT_2019_DepartPit)
+
+PIT_2006_DepartPit.df <- as.data.frame(PIT_2006_DepartPit)
+#summary(PIT_2019_DepartPit.df)
+
+```
+
+```{r warning=FALSE}
+greater602 <- subset(PIT_2006_ArrivePit.df, ArrDelay > 0 & ArrDelay <= 120)
+
+#Arrival Delay by Month
+ggplot(greater602, aes(x=Month, y=ArrDelay, fill=Month)) + geom_boxplot() + labs(title="Distributions of Delay Times by Month", x="Month", y="Delay Times in Minutes", fill= "Month")+ theme(legend.position="none")
+
+#Arrival Delay by Day of Week
+ggplot(greater602, aes(x=DayOfWeek, y=ArrDelay, fill=DayOfWeek)) + geom_violin() + labs(title="Distributions of Delay Times by Day of the Week", x="Day of the Week", y="Delay Times in Minutes", fill= "Day") + theme(legend.position="none")
+
+#Arrival Delay by Day of Month
+ggplot(greater602, aes(x=DayofMonth, y=ArrDelay)) + geom_boxplot() + labs(title="Distributions of Delay Times by Day of the Month", x="Day of the Month", y="Delay Times in Minutes") 
+
+#Arrival Delay by Carrier
+
+ggplot(greater602, aes(x=Carrier, y=ArrDelay, fill=Carrier)) + geom_boxplot() + labs(title="Distributions of Delay Times by Airline Carrier", x="Airline Carrier", y="Delay Times in Minutes", fill= "Airline Carrier") + theme(legend.position="none", axis.text.x=element_text(angle=90))
+
+car3 <- subset(PIT_2006_ArrivePit.df , ArrDelay>0 & ArrDelay<=120)
+ggplot(car3, aes(x=ArrDelay, fill="Steelblue")) + geom_density(binwidth=15) + facet_wrap(~Carrier) + theme(legend.position="none", panel.spacing=unit(0.1, "lines")) + labs(x="Delay Time", y="Frequency")
+```
+
+```{r}
+less120a1 <- subset(PIT_2006_ArrivePit.df, ArrDelay > 0 & ArrDelay < 180)
+less120d1 <- subset(PIT_2006_DepartPit.df, DepDelay > 0 & DepDelay < 180)
+
+ggplot(data=less120a1, aes(x=ArrDelay, y=Carrier, color=ArrTimeGroup)) + geom_point(alpha=0.8) + labs(x="Number of Minutes Delayed", title="Arrival Delays by Carrier and Arrival Time", fill="Scheduled Arrival Time")
+
+```
+
+```{r}
+arr12 <- subset(PIT_2006_ArrivePit.df, ArrDelay > 0 & ArrDelay <300 )
+
+ggplot(arr12, aes(x=Month, y=OriginCityName, fill=ArrDelay)) + geom_tile() + scale_fill_gradient(low="white", high="red") +labs(fill="Arr. Delay (mins)") + theme(legend.title=element_text(size=6), legend.text = element_text(size=5), axis.text.x=element_text(size=5), axis.text.y=element_text(size=5))
+
+ggplot(arr12, aes(x=ArrTimeGroup, y=Carrier, fill=ArrDelay)) + geom_tile() + scale_fill_gradient(low="white", high="red") +labs(x="Scheduled Time of Arrival", fill= "Arr. Delay (mins)") + theme(legend.title=element_text(size=6), legend.text = element_text(size=5), axis.text.x=element_text(size=5), axis.text.y=element_text(size=5))
+
+ggplot(arr12, aes(x=ArrTimeGroup, y=OriginCityName, fill=ArrDelay)) + geom_tile() + scale_fill_gradient(low="white", high="red") +labs(x="Scheduled Time of Arrival", fill= "Arr. Delay (mins)") + theme(legend.title=element_text(size=6), legend.text = element_text(size=5), axis.text.x=element_text(size=5), axis.text.y=element_text(size=5))
+
+dep12 <- subset(PIT_2006_DepartPit.df, DepDelay > 0 & DepDelay <300 )
+ggplot(dep12, aes(x=Month, y=Carrier, fill=DepDelay)) + geom_tile() + scale_fill_gradient(low="white", high="red") +labs(fill="Dep. Delay (mins)") + theme(legend.title=element_text(size=6), legend.text = element_text(size=5), axis.text.x=element_text(size=5), axis.text.y=element_text(size=5))
+
+ggplot(dep12, aes(x=DepTimeGroup, y=Carrier, fill=ArrDelay)) + geom_tile() + scale_fill_gradient(low="white", high="red") +labs(x="Scheduled Time of Departure",fill= "Arr. Delay (mins)") + theme(legend.title=element_text(size=6), legend.text = element_text(size=5), axis.text.x=element_text(size=5), axis.text.y=element_text(size=5))
+
+```
+
+**Comparison:**
+
+In 2006, there was one fewer airline carrier in the Pittsburgh Airport, and over 5,800 fewer flights (which is equivalent to roughly 16 fewer flights per day). It is possible, therefore, that increased air traffic into and out of the Pittsburgh airport could create longer delays in 2019 than in 2006.
+
+When comparing means, this is, in fact, what we observe. The average arrival delay in 2019 was 41.7 minutes, whereas in 2006 it was 31.6 minutes. The average departure delay in 2019 was 42.3 minutes, whereas in 2006 it was 31.3 minutes.
+
+```{r}
+tbl1 <- PIT_2019_2 %>% group_by(Carrier) %>%dplyr::summarize(Freq=n())
+tbl1$Total <- sum(tbl1$Freq)
+tbl1$Percentage_2019 <- round(((tbl1$Freq/tbl1$Total)*100),1)
+
+tbl2 <- PIT_2006_3 %>% group_by(Carrier) %>%dplyr::summarize(Freq=n())
+tbl2$Total <- sum(tbl2$Freq)
+tbl2$Percentage_2006 <- round(((tbl2$Freq/tbl2$Total)*100),1)
+
+tbl1<- tbl1[c("Carrier", "Percentage_2019")]
+tbl2<- tbl2[c("Carrier", "Percentage_2006")]
+
+tbl3 <- merge(x=tbl1, y=tbl2, by = "Carrier", all=TRUE)
+tbl3[is.na(tbl3)] <- 0
+tbl3
+
+```
+
+**Interpretation:**
+
+In the table above, we can also see how the percentage of flights accounted for by each airline has changed since 2006. Some airlines have emerged that were not present in 2006 (either because they are newly formed businesses, they bought and rebranded existing businesses, or they simply began to operate in the Pittsburgh Airport). Endeavor, American, Alaska, Allegiant, Hawaiian and Spirit all represent airlines that were not present in 2006 in Pittsburgh, while Continental, Atlantic, Northwest, AirBridge, and US Airways all represent airlines that have left Pittsburgh (as a result of going out of business, being bought and taken over by another company, or simply moving operations out of Pittsburgh). Overall, there is net 1 more airline operating in Pittsburgh in 2019 as compared to 2006 (16 airlines compared to 15). More airlines and more flights could lead to more competition over runway time, terminal space, gates, etc, which could explain part of the reason the average delay time has increased.
+
+```{r}
+PIT_Summary_2009 <- PIT_2019_2[!is.na(PIT_2019_2$ArrDel15), ]
+tbla <- PIT_Summary_2009 %>% group_by(Carrier,ArrDel15) %>%dplyr::summarize(Freq=n())
+tbla <- group_by(tbla, Carrier) %>% mutate(Percent_2019 = round(Freq/sum(Freq)*100,1))
+
+PIT_Summary_2006 <- PIT_2006_3[!is.na(PIT_2006_3$ArrDel15), ]
+tblb <- PIT_Summary_2006 %>% group_by(Carrier,ArrDel15) %>%dplyr::summarize(Freq=n())
+tblb <- group_by(tblb, Carrier) %>% mutate(Percent_2006 = round(Freq/sum(Freq)*100,1))
+
+tbla<- tbla[c("Carrier", "ArrDel15", "Percent_2019")]
+tblb<- tblb[c("Carrier", "ArrDel15", "Percent_2006")]
+
+tblc <- merge(x=tbla, y=tblb, by = c("Carrier", "ArrDel15"), all=TRUE)
+tblc[is.na(tblc)] <- 0
+#tblc
+
+ggplot(tblc, aes(x= Carrier, y=Percent_2006, fill=ArrDel15)) + geom_bar(stat="identity") + theme(axis.text.x=element_text(angle=90)) + labs(fill="Delayed Flight?")
+
+
+ggplot(tblc, aes(x= Carrier, y=Percent_2019, fill=ArrDel15)) + geom_bar(stat="identity") + theme(axis.text.x=element_text(angle=90)) + labs(fill="Delayed Flight?")
+
+```
+
+**Interpretation:**
+
+The light blue color in each graph above represents the percentage of flights that were delayed by 15 minutes or more. By comparing 2006 and 2019 percentages, we see that the percentage of flights that are delayed has actually improved (reduced) over this time period (the light blue area is smaller in 2019 than in 2006). Most individual carriers actually made improvements on this measure, with the exception of Frontier and SkyWest, which actually worsened. So, if the percentage of flights delayed is actually improving but the overall average length of delay is worsening, this means that the flights that are getting delayed must be experiencing longer delays than they were in 2006. 
+
+# 6. Findings
+
+In this section we will make sure we clearly restate our findings.
+
+### Question 1: Which of the features available in the PIT airport dataset are useful for predicting flight delays?
+**Answer:** We have found that while there are some features that are highly predictive of arrival delays, these features are not useful in a practical sense. For example, using Departure Delay alone, we can account for about 95% of the variation in Arrival Delay. Additionally, adding Weather Delay and Carrier Delay to a model will improve this prediction even further. However, in a practical sense, these features are not useful because they are not values that are known well in advance of a flight. These are values that are typically determined only a few hours before a flight arrives. When looking at other features that are known well in advance of a flight (Destination and Origin Cities, Month, Day of the Week, Flight Distance, Scheduled Departure and Arrival Times), we find that many of these features (or certain categories within categorical features) may be highly significant in our models but do not yield much predictive power on their own. We found, time and again, that while there were highly significant correlations, the coefficient estimates for these predictors were typically very small and were thus unable to account for much of the variation in the outcome.
+
+Predictors that were highly significant but have small coefficient estimates included:
+    + Adjusted Arrival Time
+    + Some (but not all) of the airline carriers (Delta and PSA Airlines are significant and ExpressJet is nearly significant)
+    + Some of the cities are significant (Austin, Charleston, Charolette)
+    + Over half of the months(March, April, June, July, September, October, November)
+    + Some of the days of the week (Tuesday, Friday and Saturday)
+    + Days of the month (26 of them are significant)
+  
+We believe there are two primary reasons we are unable to accurately model and predict this data. First, the data is not normally distributed (non-Gaussian). The distribution of delays is very highly skewed to the right, because about 80% of the flights have no delays whatsoever, while the remaining 20% is stretched over a very long tail. Even log transformations of this data hardly make an impact on normalizing the distribution because of this. Moving forward, we propose that analysts consider filtering the data to look at certain segments of the distribution at a time and try to develop predictive models from these filtered subsets. However, this will introduce much greater bias to the models so we have, for the most part, refrained from doing that here.
+
+Additionally, we believe that the dataset lacks sufficient numeric features and relies heavily on categorical features, which have hindered our ability to fit more extensive models, like regression trees, on the data.
+
+Additionally, many of the features in the dataset are highly correlated, which can render them not useful for predictive modeling. For example, our outcome variable (ArrDelayNew) is just a sum of 5 other variables (CarrierDelay, WeatherDelay, NasDelay, SecurityDelay and LateAircraftDelay). These variables, when used together, would perfectly predict ArrDelayNew, but are not useful practically. An interesting result of this is that we were not able to do cross-vaidation using all of these features because RStudio throws an error that says the model is already perfectly fit and that its nonsense to perform cross-validation.
+
+### Question 2: Can the PIT airport data be used to produced a flight delay warning system?
+**Answer:** While some of this data could be useful in developing a warning system, our results show that this data *alone* would not be able to accomplish the task of accurately predicting which flights will be delayed and by how much. It is true that we can develop an excellent prediction using some of the features in this dataset. For example, by incorporating Departure Delay into a model that predicts Arrival Delay, we can achieve an R-squared of about 0.95, meaning our model can account for 95% of the variance in the outcome (Arrival Delay). Additionally, by adding other features like Weather Delay or Carrier Delay, we can reach aout 0.99. But is such a system useful? We think not. The reason is because feature like arrival delay, weather delay, and carrier delay are not predictors whose values are known weeks or months in advance when customers are looking to purchase airfare. These are features that are determined typically hours before the arrival itself is delayed. So what features are fixed long in advance? Destination and origin cities, month, day of the week, flight distance, scheduled departure and arrival times, and airline carrier. If someone could reduce their chances of a delay flight by booking an early flight rather than a late one, they may want to know that. If they could book a Tuesday flight instead of a Wednesday flight, they might want to know that as well. Our results show that some of these features might be *somewhat* predictive, but they largely aren't.
+
+One way that we can try to develop a warning system from this data is by looking for other features in external datasets that are highly correlated with our feature. Take for example, WeatherDelay. If we could find variables that highly correlate to WeatherDelay (like humidity, temperature, precipitation, windspeed, atmospheric pressure, extreme weather), then we would likely be able to better predict delay times in advance.
+
+### Question 3: What has changed at PIT airport since 2006 when it comes to flight delays?
+Many of these comparisons have already been reported earlier in this report. We will simply restate some of the findings here.
+
+1. Average delay time has increased by about 10-11 minutes for both arrivals to and departures from Pittsburgh.
+
+2. There are more flights coming into and out of Pittsburgh (and more airlines operating in Pittsburgh) in 2019 than in 2006.
+
+3. On average, airlines have actually reduced the number of flights delayed from 2006 to 2019, but average delay time is still longer for the flights that are delayed.
+
+4. Many other trends that we noticed in the 2019 exploratory data analysis hold true for 2006 as well. For example:
+
+    + Flight delays continue to be highly right-skewed distributions for both 2019 and 2006.
+    + Carriers still tend to have much longer delays for flights that leave later in the day, in both 2019 and 2006.
+    + Certain combinations of categorical variables (Carrier, Month, Destination and Origin city) continue to produce "hotspots" for delay times, though it is difficult to account for these interactions between categorical variables in our models.
+
+# 7. Conclusion
+
+Summarizing the exploration to build a predictive model for flight delays in Pittsburgh airport, we started with identifying the arrival delay as the outcome variable of interest and carried out our exploratory data analysis (EDA). We found some variables like departure delay to explain  the arrival delay very well. And some delays like Security delay and weather delay contributed to the departure delay. But these are highly correlated with the arrival delay and wont be useful in prediction. Some other variables for which data will be available in advance like date of travel, flight carrier and arrival/ departure times has less variation among them and created doubts on how well the prediction model will be. 
+
+As expected, the  multiple linear regression model with identified variables could predict only around 10% of the variation in the delay. With the non-linearity and skewed data as seen from diagnostic plots, regression was not the best model to forecast. The limitation in handling interaction effects by regression model also showed that a better model like regression trees can explain better. 
+
+The large number of categorical variables and the very few and insignificant continuous variable, made the prediction task little difficult. The regression trees could not be used due to limitation in number of factor levels that can be computed. Random forest package was used to build bagging and random forest model and we hoped the interaction to be taken care of. The model performed 4 times better than regression in explaining the changes in outcome. At the same time, we realized how other variables like weather, precipitation, wind speed, holidays, etc could explain the model better and give improved prediction. 
+Even though models like random forest are not good at interpretation and makes it a black box for the common man, in this problem, where multiple factors influence the delay, tree-based models perform well. With more relevant variables, we can build a more robust model to predict flight delays. 
